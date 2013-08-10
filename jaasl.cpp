@@ -26,9 +26,14 @@
 #include <vector>
 #include <android/asset_manager.h>
 #include <android/log.h>
+
+#include <SLES/OpenSLES.h>
+#include <SLES/OpenSLES_Android.h>
+
 #include "jaasl.h"
 
 #define JAASL_ERROR_LOG(...) __android_log_print(ANDROID_LOG_ERROR, "JAASL", __VA_ARGS__)
+#define JAASL_INFO_LOG(...) __android_log_print(ANDROID_LOG_INFO, "JAASL", __VA_ARGS__)
 #define D_OBJ(hndl) \
 	JAASLAudioFileDesc& d = d_object(hndl)
 
@@ -61,7 +66,7 @@ private:
 		return m_descs[idx];
 	}
 	
-	static PlayerCallback(SLPlayItf caller, void *pContext, SLuint32 event)
+	static void PlayerCallback(SLPlayItf caller, void *pContext, SLuint32 event)
 	{
 		if(event == SL_PLAYEVENT_HEADATEND)
 		{
@@ -108,14 +113,14 @@ public:
 		}
 		
 		// create output mix
-		if((*m_engineEngine)->CreateOutputMix(m_engineEngine, &m_output, 0, NULL, NULL) != SL_RESULT_SUCCESS)
+		if((*m_engineEngine)->CreateOutputMix(m_engineEngine, &m_outputMix, 0, NULL, NULL) != SL_RESULT_SUCCESS)
 		{
 			JAASL_ERROR_LOG("Engine CreateOutputMix failed.\n");
 			return false;
 		}
 		
 		// realize output mix
-		if((*m_output)->Realize(m_output, SL_BOOLEAN_FALSE) != SL_RESULT_SUCCESS)
+		if((*m_outputMix)->Realize(m_outputMix, SL_BOOLEAN_FALSE) != SL_RESULT_SUCCESS)
 		{
 			JAASL_ERROR_LOG("OutputMix Realize failed.\n");
 			return false;
@@ -163,7 +168,7 @@ public:
 	
 	/**************************************************************/
 	
-	bool loadFromAsset(const AAsset* asset, unsigned int& handle)
+	bool loadFromAsset(AAsset* asset, unsigned int& handle)
 	{
 		if(!asset)
 		{
@@ -232,9 +237,17 @@ public:
 		}
 		
 		// register a callback to notify when the play has finished
-		if((*fdPlayerObject)->RegisterCallback(fdPlayerObject, JAASoundLibPrivate::PlayerCallback, NULL) != SL_RESULT_SUCCESS)
+		if((*fdPlayerPlay)->RegisterCallback(fdPlayerPlay, JAASoundLibPrivate::PlayerCallback, NULL) != SL_RESULT_SUCCESS)
 		{
 			JAASL_ERROR_LOG("Failed to register callback function.\n");
+			(*fdPlayerObject)->Destroy(fdPlayerObject);
+			return false;
+		}
+		
+		// set mask
+		if((*fdPlayerPlay)->SetCallbackEventsMask(fdPlayerPlay, SL_PLAYEVENT_HEADATEND) != SL_RESULT_SUCCESS)
+		{
+			JAASL_ERROR_LOG("Failed to set callback mask.\n");
 			(*fdPlayerObject)->Destroy(fdPlayerObject);
 			return false;
 		}
@@ -264,6 +277,8 @@ public:
 		{
 			(*d.playItf)->SetPlayState(d.playItf, SL_PLAYSTATE_PLAYING);
 		}
+		
+		return false;
 	}
 	
 	/**************************************************************/
@@ -279,6 +294,8 @@ public:
 		{
 			(*d.playItf)->SetPlayState(d.playItf, SL_PLAYSTATE_STOPPED);
 		}
+		
+		return false;
 	}
 	
 	/**************************************************************/
@@ -294,6 +311,8 @@ public:
 		{
 			(*d.playItf)->SetPlayState(d.playItf, SL_PLAYSTATE_PAUSED);
 		}
+		
+		return false;
 	}
 	
 	/**************************************************************/
@@ -301,7 +320,7 @@ public:
 	void setVolume(unsigned int handle, float gain)
 	{
 		if(handle == 0)
-			return false;
+			return;
 		
 		D_OBJ(handle);
 		
@@ -319,7 +338,7 @@ public:
 	void setLooped(unsigned int handle, bool bLoop)
 	{
 		if(handle == 0)
-			return false;
+			return;
 		
 		D_OBJ(handle);
 		
@@ -335,7 +354,7 @@ public:
 	void setPlayPosition(unsigned int handle, unsigned long msec)
 	{
 		if(handle == 0)
-			return false;
+			return;
 		
 		D_OBJ(handle);
 		
@@ -350,14 +369,30 @@ public:
 	unsigned long playLength(unsigned int handle)
 	{
 		if(handle == 0)
-			return false;
+			return 0;
 		
 		D_OBJ(handle);
 		
 		SLmillisecond msec = 0;
 		if (d.playItf)
 		{
+			// the player needs to be in either pause or play state
+			SLuint32 playState;
+			(*d.playItf)->GetPlayState(d.playItf, &playState);
+			
+			if(playState != SL_PLAYSTATE_PAUSED && playState != SL_PLAYSTATE_PLAYING)
+			{
+				(*d.playItf)->SetPlayState(d.playItf, SL_PLAYSTATE_PAUSED);
+			}
+			
+			// retrieve the duration
 			(*d.playItf)->GetDuration(d.playItf, &msec);
+			
+			// reset back to original state
+			if(playState != SL_PLAYSTATE_PAUSED && playState != SL_PLAYSTATE_PLAYING)
+			{
+				(*d.playItf)->SetPlayState(d.playItf, playState);
+			}
 		}
 		
 		return (unsigned long)msec;
@@ -393,7 +428,7 @@ void JAASoundLib::destroy()
 
 /**************************************************************/
 
-bool JAASoundLib::loadFromAsset(const AAsset* asset, unsigned int& handle)
+bool JAASoundLib::loadFromAsset(AAsset* asset, unsigned int& handle)
 {
 	return m_dptr->loadFromAsset(asset, handle);
 }
@@ -444,20 +479,20 @@ void JAASoundLib::setPlayPosition(unsigned int handle, unsigned long msec)
 
 unsigned long JAASoundLib::playLength(unsigned int handle)
 {
-	return m_dptr->playLength(unsigned int handle);
+	return m_dptr->playLength(handle);
 }
 
 /**************************************************************/
 
 void JAASoundLib::stopAll()
 {
-	std::vector<SAudioImplDesc>& descs = m_dptr->m_Descs;
+	std::vector<JAASLAudioFileDesc>& descs = m_dptr->m_descs;
 	for(int i = 0; i < descs.size(); ++i)
 	{
-		const SAudioImplDesc& d = descs[i];
-		if (d.fdPlayerPlay)
+		const JAASLAudioFileDesc& d = descs[i];
+		if (d.playItf)
 		{
-			(*d.fdPlayerPlay)->SetPlayState(d.fdPlayerPlay, SL_PLAYSTATE_STOPPED);
+			(*d.playItf)->SetPlayState(d.playItf, SL_PLAYSTATE_STOPPED);
 		}
 	}
 }

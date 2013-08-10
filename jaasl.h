@@ -55,7 +55,7 @@ public:
 		@param handle A handle to this audio file.
 		@return true if successful.
 	*/
-	bool loadFromAsset(const AAsset* asset, unsigned int& handle);
+	bool loadFromAsset(AAsset* asset, unsigned int& handle);
 	
 	/*!
 		@function play
@@ -118,7 +118,7 @@ public:
 		@param handle The audio file to query.
 		@return the audio file length in milliseconds.
 	*/
-	unsigned long playLength(unsigned int handle) const;
+	unsigned long playLength(unsigned int handle);
 	
 private:
 	JAASoundLibPrivate*           m_dptr;
