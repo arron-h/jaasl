@@ -41,8 +41,8 @@ public:
 	bool initialise();
 
 	/*!
-	 @function destroy
-	 @brief Destroys the sound library, freeing memory and hardware handles.
+		@function destroy
+		@brief Destroys the sound library, freeing memory and hardware handles.
 	 */
 	void destroy();
 	
